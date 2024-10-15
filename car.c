@@ -44,7 +44,7 @@ car_shared_mem *shared_mem = NULL; // Pointer to the shared memory structure
 
 int sockfd = -1;             // Socket file descriptor for network communication
 int connected = 0;           // Connection status flag (0 = not connected, 1 = connected)
-int delay_ms = 1000;         // Delay in milliseconds for elevator operations
+int delay = 1000;         // Delay in milliseconds for elevator operations
 pthread_t tcp_thread;     // Thread for TCP communication
 
 char *lowest_floor = NULL; // Store lowest floor globally for use in TCP thread
@@ -242,7 +242,7 @@ void *tcp_communication(void *arg) {
             sockfd = socket(AF_INET, SOCK_STREAM, 0); // 0 for default protocol (TCP), otherwise use IPPROTO_TCP
             if (sockfd < 0) {
                 perror("Socket creation failed");
-                sleep(delay_ms / 1000);
+                sleep(delay / 1000);
                 continue;
             }
 
@@ -258,7 +258,7 @@ void *tcp_communication(void *arg) {
             if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
                 // perror("Connect failed");
                 close(sockfd);
-                sleep(delay_ms / 1000);
+                sleep(delay / 1000);
                 continue;
             }
 
@@ -286,7 +286,7 @@ void *tcp_communication(void *arg) {
         double elapsed_ms = (current_time.tv_sec - last_status_time.tv_sec) * 1000.0 +
                             (current_time.tv_nsec - last_status_time.tv_nsec) / 1000000.0;
 
-        if (elapsed_ms >= delay_ms) {
+        if (elapsed_ms >= delay) {
             // Lock shared memory to read status
             pthread_mutex_lock(&shared_mem->mutex);
             char status_msg[BUFFER_SIZE];
@@ -306,7 +306,7 @@ void *tcp_communication(void *arg) {
             printf("Controller disconnected\n");
             close(sockfd);
             connected = 0;
-            sleep(delay_ms / 1000);
+            sleep(delay / 1000);
             continue;
         }
         // free(recv_buffer);
@@ -349,7 +349,7 @@ void *tcp_communication(void *arg) {
         pthread_mutex_unlock(&shared_mem->mutex);
 
 
-        usleep(100000); // Sleep for 100ms
+        sleep(delay / 1000); // Sleep for 100ms
     }
     
     // Clean up
@@ -445,14 +445,14 @@ void handle_door_operations() {
     // Continue door operation based on status
     // if status is "Opening", wait for delay and change status to "Open"
     if (strcmp(shared_mem->status, "Opening") == 0) {
-        usleep(delay_ms * 1000);
+        sleep(delay * 1000);
         pthread_mutex_lock(&shared_mem->mutex);
         strncpy(shared_mem->status, "Open", sizeof(shared_mem->status));
         pthread_cond_broadcast(&shared_mem->cond);
         pthread_mutex_unlock(&shared_mem->mutex);
     // if status is "Closing", wait for delay and change status to "Closed"
     } else if (strcmp(shared_mem->status, "Closing") == 0) {
-        usleep(delay_ms * 1000);
+        sleep(delay * 1000);
         pthread_mutex_lock(&shared_mem->mutex);
         strncpy(shared_mem->status, "Closed", sizeof(shared_mem->status));
         pthread_cond_broadcast(&shared_mem->cond);
@@ -461,7 +461,7 @@ void handle_door_operations() {
 }
 
 // Normal Operation main loop
-void normal_operation(const char *destination_floor) {
+void normal_operation(void) {
     // main loop runs as long as the 'running' flag is true
     while (running) {
         // lock the shared memory mutex to safely access shared variables/avoid conflicts
@@ -519,7 +519,7 @@ void normal_operation(const char *destination_floor) {
             pthread_mutex_unlock(&shared_mem->mutex);
 
             // Wait for delay to simulate time taken to move one floor
-            usleep(delay_ms * 1000);
+            sleep(delay * 1000);
 
             // Lock the mutex again to update shared variables
             pthread_mutex_lock(&shared_mem->mutex);
@@ -558,10 +558,10 @@ int main(int argc, char *argv[]) {
     char *name = argv[1];
     lowest_floor = argv[2];
     highest_floor = argv[3];
-    delay_ms = atoi(argv[4]);   // convert to int
+    delay = atoi(argv[4]);   // convert to int
 
     // Validate delay_ms
-    if (delay_ms <= 0) {
+    if (delay <= 0) {
         fprintf(stderr, "Invalid delay value. It must be a positive integer.\n");
         exit(EXIT_FAILURE);
     }
