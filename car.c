@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 199309L // Enable CLOCK_MONOTONIC definition
+
 #include <stdio.h>      // Standard I/O functions
 #include <stdlib.h>     // Standard library functions
 #include <string.h>     // String manipulation functions
@@ -13,7 +15,6 @@
 #include <sys/types.h>  // Data types
 #include <errno.h>      // Error handling
 #include <netinet/in.h> // Internet address family
-#include <sys/types.h>  // Data types
 #include <time.h>       // Time functions
 
 // Define constants for ICP-IP communication
@@ -147,13 +148,16 @@ void init_shared_memory(char *name, char *lowest_floor) {
     // Initialize other fields
     // Initialize the current and destination floor with the lowest floor
     strncpy(shared_mem->current_floor, lowest_floor, sizeof(shared_mem->current_floor));
-    // shared_mem->current_floor[sizeof(shared_mem->current_floor) - 1] = '\0'; // Ensure null-termination ?
+    shared_mem->current_floor[sizeof(shared_mem->current_floor) - 1] = '\0'; // Null-terminate the string
+
     strncpy(shared_mem->destination_floor, lowest_floor, sizeof(shared_mem->destination_floor));
-    // shared_mem->destination_floor[sizeof(shared_mem->destination_floor) - 1] = '\0'; ?
+    shared_mem->destination_floor[sizeof(shared_mem->destination_floor) - 1] = '\0'; // Null-terminate the string
+
     // Initialize the status with "Closed"
     strncpy(shared_mem->status, "Closed", sizeof(shared_mem->status));
-    // shared_mem->status[sizeof(shared_mem->status) - 1] = '\0'; ?
+    shared_mem->status[sizeof(shared_mem->status) - 1] = '\0';  // Null-terminate the string
 
+    // Initialize other flags
     shared_mem->open_button = 0;
     shared_mem->close_button = 0;
     shared_mem->door_obstruction = 0;
@@ -169,7 +173,7 @@ void init_shared_memory(char *name, char *lowest_floor) {
     pthread_mutex_unlock(&shared_mem->mutex);
 }
 
-// Controller helper functions (1)
+// Controller helper functions (recieve)
 void recv_looped(int fd, void *buf, size_t sz) {
     char *ptr = buf;
     size_t remain = sz;
@@ -187,7 +191,6 @@ void recv_looped(int fd, void *buf, size_t sz) {
         remain -= received;
     }
 }
-// Controller helper functions (2)
 char *receive_msg(int fd) {
     uint32_t nlen;
     recv_looped(fd, &nlen, sizeof(nlen));
@@ -201,6 +204,7 @@ char *receive_msg(int fd) {
     buf[len] = '\0'; // Null-terminate the message
     return buf;
 }
+// Controller helper functions (send)
 void send_looped(int fd, const void *buf, size_t sz) {
     const char *ptr = buf;
     size_t remain = sz;
@@ -214,7 +218,6 @@ void send_looped(int fd, const void *buf, size_t sz) {
         remain -= sent;
     }
 }
-
 void send_message(int fd, const char *buf) {
     uint32_t len = htonl(strlen(buf));
     send_looped(fd, &len, sizeof(len));
@@ -227,6 +230,10 @@ void *tcp_communication(void *arg) {
     struct sockaddr_in serv_addr;
     char send_buffer[BUFFER_SIZE];
     char recv_buffer[BUFFER_SIZE];
+
+    // Set socket to non-blocking
+    int flags = fcntl(sockfd, F_GETFL, 0);
+    fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
 
     while (running) {
         // Attempt to connect if not connected
@@ -326,12 +333,21 @@ void *tcp_communication(void *arg) {
             } else if (shared_mem->emergency_mode) {
                 snprintf(mode_msg, BUFFER_SIZE, "EMERGENCY");
             }
+            // where is this message being sent?
             send_message(sockfd, mode_msg);
             close(sockfd);
             connected = 0;
             printf("Disconnected from controller due to mode change\n");
+            // if ((shared_mem->individual_service_mode || shared_mem->emergency_mode) && connected) {
+            // // Send appropriate message before disconnecting
+            // char *mode_msg = shared_mem->individual_service_mode ? "INDIVIDUAL SERVICE" : "EMERGENCY";
+            // send_message(sockfd, mode_msg);
+            // close(sockfd);
+            // connected = 0;
+            // printf("Disconnected from controller due to mode change\n");
         }
         pthread_mutex_unlock(&shared_mem->mutex);
+
 
         usleep(100000); // Sleep for 100ms
     }
@@ -344,9 +360,213 @@ void *tcp_communication(void *arg) {
 
 }
 
-int main(int argc, char *argv[]) {
-    // ... (argument parsing and initialization)
 
+// Elevator Movement Helper Functions
+int floor_label_to_number(const char *floor_label) {
+    if (floor_label[0] == 'B' || floor_label[0] == 'b') {
+        // Basement floor
+        int floor_num = atoi(floor_label + 1);
+        return -floor_num;
+    } else {
+        // Regular floor
+        return atoi(floor_label);
+    }
+}
+void floor_number_to_label(int floor_num, char *floor_label, size_t label_size) {
+    if (floor_num < 0) {
+        // Basement floor
+        snprintf(floor_label, label_size, "B%d", -floor_num);
+    } else {
+        // Regular floor
+        snprintf(floor_label, label_size, "%d", floor_num);
+    }
+}
+void move_one_floor() {
+    // Convert current and destination floors to numbers
+    int current_floor_num = floor_label_to_number(shared_mem->current_floor);
+    int destination_floor_num = floor_label_to_number(shared_mem->destination_floor);
+
+    // Update current floor to one floor closer to destination
+    if (current_floor_num < destination_floor_num) {
+        current_floor_num++;
+    } else if (current_floor_num > destination_floor_num) {
+        current_floor_num--;
+    }
+
+    // Convert back to floor label
+    floor_number_to_label(current_floor_num, shared_mem->current_floor, sizeof(shared_mem->current_floor));
+    shared_mem->current_floor[sizeof(shared_mem->current_floor) - 1] = '\0';
+
+    // Update status to Closed
+    strncpy(shared_mem->status, "Closed", sizeof(shared_mem->status));
+    // shared_mem->status[sizeof(shared_mem->status) - 1] = '\0';
+    // Notify other processes or threads waiting on this condition variable
+    pthread_cond_broadcast(&shared_mem->cond);
+    // unlock the mutex after updating shared variables
+    pthread_mutex_unlock(&shared_mem->mutex);
+}
+int is_floor_within_range(const char *floor_label) {
+    // Convert floor labels to numbers
+    int floor_num = floor_label_to_number(floor_label);
+    int lowest_floor_num = floor_label_to_number(lowest_floor);
+    int highest_floor_num = floor_label_to_number(highest_floor);
+
+    // Check if the floor number is within the range
+    return floor_num >= lowest_floor_num && floor_num <= highest_floor_num;
+}
+void handle_door_operations() {
+    // Lock the mutex before accessing shared variables
+    pthread_mutex_lock(&shared_mem->mutex);
+
+    // If open_button is pressed, open the doors
+    if (shared_mem->open_button) {
+        // Handle open button if doors are closed or closing
+        if (strcmp(shared_mem->status, "Closed") == 0 || strcmp(shared_mem->status, "Closing") == 0) {
+            // Reopen doors
+            strncpy(shared_mem->status, "Opening", sizeof(shared_mem->status));
+        }
+        // Reset open_button
+        shared_mem->open_button = 0;
+    }
+
+    if (shared_mem->close_button) {
+        // Handle close button
+        if (strcmp(shared_mem->status, "Open") == 0) {
+            // Start closing doors
+            strncpy(shared_mem->status, "Closing", sizeof(shared_mem->status));
+        }
+        // Reset close_button
+        shared_mem->close_button = 0;
+    }
+
+    pthread_cond_broadcast(&shared_mem->cond);
+    pthread_mutex_unlock(&shared_mem->mutex);
+
+    // Continue door operation based on status
+    // if status is "Opening", wait for delay and change status to "Open"
+    if (strcmp(shared_mem->status, "Opening") == 0) {
+        usleep(delay_ms * 1000);
+        pthread_mutex_lock(&shared_mem->mutex);
+        strncpy(shared_mem->status, "Open", sizeof(shared_mem->status));
+        pthread_cond_broadcast(&shared_mem->cond);
+        pthread_mutex_unlock(&shared_mem->mutex);
+    // if status is "Closing", wait for delay and change status to "Closed"
+    } else if (strcmp(shared_mem->status, "Closing") == 0) {
+        usleep(delay_ms * 1000);
+        pthread_mutex_lock(&shared_mem->mutex);
+        strncpy(shared_mem->status, "Closed", sizeof(shared_mem->status));
+        pthread_cond_broadcast(&shared_mem->cond);
+        pthread_mutex_unlock(&shared_mem->mutex);
+    }
+}
+
+// Normal Operation main loop
+void normal_operation(const char *destination_floor) {
+    // main loop runs as long as the 'running' flag is true
+    while (running) {
+        // lock the shared memory mutex to safely access shared variables/avoid conflicts
+        pthread_mutex_lock(&shared_mem->mutex);
+
+        // Handle emergency mode
+        if (shared_mem->emergency_mode) {
+            // cease all operations
+            // unlock the mutex before entering the emergency handling loop to allow other threads to access shared memory
+            pthread_mutex_unlock(&shared_mem->mutex);
+            // allow door operations via buttons
+            handle_door_operations();
+            continue;
+        }
+
+        // Handle individual service mode
+        if (shared_mem->individual_service_mode) {
+            // doors do not open/close automatically - handled by technician
+            // Technician controls movement
+            if (strcmp(shared_mem->status, "Open") == 0 || strcmp(shared_mem->status, "Closed") == 0) {
+                // Check if destination_floor has changed
+                if (strcmp(shared_mem->current_floor, shared_mem->destination_floor) != 0) {
+                    // Ensure doors are closed before moving
+                    if (strcmp(shared_mem->status, "Closed") == 0) {
+                        // Validate destination_floor
+                        if (is_floor_within_range(shared_mem->destination_floor)) {
+                            // Move one floor
+                            move_one_floor();
+                        } else {
+                            // Reset destination_floor to current_floor
+                            strncpy(shared_mem->destination_floor, shared_mem->current_floor, sizeof(shared_mem->destination_floor));
+                        }
+                    }
+                }
+            }
+            // unlock the mutex before handling door operations
+            pthread_mutex_unlock(&shared_mem->mutex);
+            // handle door operations via buttons
+            handle_door_operations();
+            continue;
+        }
+
+        // Normal operation
+        // Check if the destination floor is different from the current floor and the doors are closed (ready to move)
+        if (strcmp(shared_mem->current_floor, shared_mem->destination_floor) != 0 &&
+            strcmp(shared_mem->status, "Closed") == 0) {
+
+            // Change the car's status to 'Between'
+            strncpy(shared_mem->status, "Between", sizeof(shared_mem->status)); // ensure string is null-terminated
+
+            // Notify other processes or threads waiting on this condition variable (will be useful for queing)
+            pthread_cond_broadcast(&shared_mem->cond);
+
+            // Unlock the mutex before simulating the movement delay
+            pthread_mutex_unlock(&shared_mem->mutex);
+
+            // Wait for delay to simulate time taken to move one floor
+            usleep(delay_ms * 1000);
+
+            // Lock the mutex again to update shared variables
+            pthread_mutex_lock(&shared_mem->mutex);
+
+            // Move one floor towards the destination floor
+            move_one_floor();
+
+            // Check if the car has arrived at the destination floor
+            if (strcmp(shared_mem->current_floor, shared_mem->destination_floor) == 0) {
+                // Proceed to handle door operations upon arrival
+                handle_door_operations();
+            }
+        } else {
+        // Either the car is already at the destination floor or doors are not closed
+
+            // Unlock the mutex before handling door operations
+            pthread_mutex_unlock(&shared_mem->mutex);
+
+            // Handle door operations
+            handle_door_operations();
+        }
+
+
+    }
+}
+
+
+int main(int argc, char *argv[]) {
+    
+    // Argument parsing and initialization
+    if (argc != 5) {
+        fprintf(stderr, "Usage: %s {name} {lowest floor} {highest floor} {delay}\n", argv[0]);
+        exit(EXIT_FAILURE);
+    }
+    
+    char *name = argv[1];
+    lowest_floor = argv[2];
+    highest_floor = argv[3];
+    delay_ms = atoi(argv[4]);   // convert to int
+
+    // Validate delay_ms
+    if (delay_ms <= 0) {
+        fprintf(stderr, "Invalid delay value. It must be a positive integer.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // Could add more validations for car input arguments
 
     // Signal handling
     signal(SIGINT, handle_sigint);
@@ -359,13 +579,16 @@ int main(int argc, char *argv[]) {
     pthread_create(&tcp_thread, NULL, tcp_communication, (void *)name);
 
     // // Start elevator main loop
-    // elevator_main_loop();
+    normal_operation();
 
     // Wait for TCP thread to finish
     pthread_join(tcp_thread, NULL);
 
-    // Clean up resources
-    // ... (unmap shared memory, close file descriptors)
+    // Cleanup shared memory
+    munmap(shared_mem, sizeof(car_shared_mem));
+    shm_unlink(shm_name);
+    close(shm_fd);
+    free(shm_name);
 
     return 0;
 }
