@@ -277,7 +277,7 @@ void *tcp_communication(void *arg) {
         // Send STATUS updates periodically
         static struct timespec last_status_time = {0, 0};
         struct timespec current_time;
-        clock_gettime(CLOCK_MONOTONIC, &current_time);
+        clock_gettime(CLOCK_REALTIME, &current_time);
         // struct timeval tv;
         // gettimeofday(&tv, NULL);
         // current_time.tv_sec = tv.tv_sec;
@@ -297,6 +297,18 @@ void *tcp_communication(void *arg) {
             send_message(sockfd, status_msg);
             last_status_time = current_time;
         }
+
+        // if (elapsed_ms >= delay) {
+        //     // Lock shared memory to read status
+        //     pthread_mutex_lock(&shared_mem->mutex);
+        //     char status_msg[BUFFER_SIZE];
+        //     snprintf(status_msg, BUFFER_SIZE, "STATUS %s %s %s",
+        //              shared_mem->status, shared_mem->current_floor, shared_mem->destination_floor);
+        //     pthread_mutex_unlock(&shared_mem->mutex);
+
+        //     send_message(sockfd, status_msg);
+        //     last_status_time = current_time;
+        // }
 
         // Receive messages from controller
         char *recv_buffer = NULL;

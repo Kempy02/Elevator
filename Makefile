@@ -1,6 +1,6 @@
 # define compiler and flags as variables
 CC = gcc
-# CFLAGS = -Wall -pthread
+CFLAGS = -Wall -pthread
 
 # Define targets
 all: car #controller call internal safety
@@ -9,8 +9,8 @@ all: car #controller call internal safety
 car: car.c
 	$(CC) -o car car.c
 
-# controller: controller.c
-#     $(CC) $(CFLAGS) -o controller controller.c
+controller: controller.c
+	$(CC) $(CFLAGS) -o controller controller.c
 
 # call: call.c
 #     $(CC) $(CFLAGS) -o call call.c
