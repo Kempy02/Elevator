@@ -15,8 +15,8 @@ controller: controller.c
 # call: call.c
 #     $(CC) $(CFLAGS) -o call call.c
 
-# internal: internal.c
-#     $(CC) $(CFLAGS) -o internal internal.c
+internal: internal.c
+	$(CC) $(CFLAGS) -o internal internal.c
 
 # safety: safety.c
 #     $(CC) $(CFLAGS) -o safety safety.c

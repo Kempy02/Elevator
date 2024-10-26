@@ -59,7 +59,7 @@ void handle_sigint(int sig) {
 
 void init_shared_memory(char *name, char *lowest_floor) {
     // Allocate memory for the shared memory name
-    shm_name = malloc(strlen("/car") + strlen(name) + 1); // +1 for the null terminator
+    shm_name = malloc(strlen("/car") + strlen(name) + 1); 
     if (shm_name == NULL) {
         perror("Failed to allocate memory for shared memory name");
         exit(EXIT_FAILURE);
